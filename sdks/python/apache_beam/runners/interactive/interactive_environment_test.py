@@ -19,16 +19,27 @@
 from __future__ import absolute_import
 
 import importlib
+import sys
 import unittest
 
 import apache_beam as beam
 from apache_beam.runners import runner
+from apache_beam.runners.interactive import cache_manager as cache
 from apache_beam.runners.interactive import interactive_environment as ie
+
+# TODO(BEAM-8288): clean up the work-around of nose tests using Python2 without
+# unittest.mock module.
+try:
+  from unittest.mock import call, patch
+except ImportError:
+  from mock import call, patch
 
 # The module name is also a variable in module.
 _module_name = 'apache_beam.runners.interactive.interactive_environment_test'
 
 
+@unittest.skipIf(sys.version_info < (3, 6),
+                 'The tests require at least Python 3.6 to work.')
 class InteractiveEnvironmentTest(unittest.TestCase):
 
   def setUp(self):
@@ -98,7 +109,8 @@ class InteractiveEnvironmentTest(unittest.TestCase):
     with self.assertRaises(AssertionError) as ctx:
       ie.current_env().set_pipeline_result(NotPipeline(),
                                            runner.PipelineResult(
-                                               runner.PipelineState.RUNNING))
+                                               runner.PipelineState.RUNNING),
+                                           is_main_job=True)
       self.assertTrue('pipeline must be an instance of apache_beam.Pipeline '
                       'or its subclass' in ctx.exception)
 
@@ -107,7 +119,10 @@ class InteractiveEnvironmentTest(unittest.TestCase):
       pass
 
     with self.assertRaises(AssertionError) as ctx:
-      ie.current_env().set_pipeline_result(self._p, NotResult())
+      ie.current_env().set_pipeline_result(
+          self._p,
+          NotResult(),
+          is_main_job=True)
       self.assertTrue('result must be an instance of '
                       'apache_beam.runners.runner.PipelineResult or its '
                       'subclass' in ctx.exception)
@@ -121,42 +136,131 @@ class InteractiveEnvironmentTest(unittest.TestCase):
 
     pipeline = PipelineSubClass()
     pipeline_result = PipelineResultSubClass(runner.PipelineState.RUNNING)
-    ie.current_env().set_pipeline_result(pipeline, pipeline_result)
+    ie.current_env().set_pipeline_result(
+        pipeline,
+        pipeline_result,
+        is_main_job=True)
     self.assertIs(ie.current_env().pipeline_result(pipeline), pipeline_result)
 
   def test_determine_terminal_state(self):
     for state in (runner.PipelineState.DONE,
-                  runner.PipelineState.STOPPED,
                   runner.PipelineState.FAILED,
                   runner.PipelineState.CANCELLED,
                   runner.PipelineState.UPDATED,
                   runner.PipelineState.DRAINED):
-      ie.current_env().set_pipeline_result(self._p, runner.PipelineResult(
-          state))
+      ie.current_env().set_pipeline_result(
+          self._p,
+          runner.PipelineResult(state),
+          is_main_job=True)
       self.assertTrue(ie.current_env().is_terminated(self._p))
     for state in (runner.PipelineState.UNKNOWN,
                   runner.PipelineState.STARTING,
-
+                  runner.PipelineState.STOPPED,
                   runner.PipelineState.RUNNING,
                   runner.PipelineState.DRAINING,
                   runner.PipelineState.PENDING,
                   runner.PipelineState.CANCELLING,
                   runner.PipelineState.UNRECOGNIZED):
-      ie.current_env().set_pipeline_result(self._p, runner.PipelineResult(
-          state))
+      ie.current_env().set_pipeline_result(
+          self._p,
+          runner.PipelineResult(state),
+          is_main_job=True)
       self.assertFalse(ie.current_env().is_terminated(self._p))
 
   def test_evict_pipeline_result(self):
     pipeline_result = runner.PipelineResult(runner.PipelineState.DONE)
-    ie.current_env().set_pipeline_result(self._p, pipeline_result)
+    ie.current_env().set_pipeline_result(
+        self._p,
+        pipeline_result,
+        is_main_job=True)
     self.assertIs(ie.current_env().evict_pipeline_result(self._p),
                   pipeline_result)
     self.assertIs(ie.current_env().pipeline_result(self._p), None)
 
-  def test_is_none_when_pipeline_absent(self):
+  def test_pipeline_result_is_none_when_pipeline_absent(self):
     self.assertIs(ie.current_env().pipeline_result(self._p), None)
     self.assertIs(ie.current_env().is_terminated(self._p), True)
     self.assertIs(ie.current_env().evict_pipeline_result(self._p), None)
+
+  @patch('atexit.register')
+  def test_no_cleanup_when_cm_none(self,
+                                   mocked_atexit):
+    ie.new_env(None)
+    mocked_atexit.assert_not_called()
+
+  @patch('atexit.register')
+  def test_cleanup_when_cm_not_none(self,
+                                    mocked_atexit):
+    ie.new_env(cache.FileBasedCacheManager())
+    mocked_atexit.assert_called_once()
+
+  @patch('atexit.register')
+  @patch('atexit.unregister')
+  def test_cleanup_unregistered_when_not_none_cm_cleared(self,
+                                                         mocked_unreg,
+                                                         mocked_reg):
+    ie.new_env(cache.FileBasedCacheManager())
+    mocked_reg.assert_called_once()
+    mocked_unreg.assert_not_called()
+    ie.current_env().set_cache_manager(None)
+    mocked_reg.assert_called_once()
+    mocked_unreg.assert_called_once()
+
+  @patch('atexit.register')
+  @patch('atexit.unregister')
+  def test_cleanup_reregistered_when_cm_changed(self,
+                                                mocked_unreg,
+                                                mocked_reg):
+    ie.new_env(cache.FileBasedCacheManager())
+    mocked_unreg.assert_not_called()
+    ie.current_env().set_cache_manager(cache.FileBasedCacheManager())
+    mocked_unreg.assert_called_once()
+    mocked_reg.assert_has_calls([call(ie.current_env().cleanup),
+                                 call(ie.current_env().cleanup)])
+
+  @patch('apache_beam.runners.interactive.interactive_environment'
+         '.InteractiveEnvironment.cleanup')
+  def test_cleanup_invoked_when_new_env_replace_not_none_env(self,
+                                                             mocked_cleanup):
+    ie._interactive_beam_env = None
+    ie.new_env(cache.FileBasedCacheManager())
+    mocked_cleanup.assert_not_called()
+    ie.new_env(cache.FileBasedCacheManager())
+    mocked_cleanup.assert_called_once()
+
+  @patch('apache_beam.runners.interactive.interactive_environment'
+         '.InteractiveEnvironment.cleanup')
+  def test_cleanup_invoked_when_cm_changed(self,
+                                           mocked_cleanup):
+    ie._interactive_beam_env = None
+    ie.new_env(cache.FileBasedCacheManager())
+    ie.current_env().set_cache_manager(cache.FileBasedCacheManager())
+    mocked_cleanup.assert_called_once()
+
+  @patch('atexit.register')
+  @patch('atexit.unregister')
+  def test_cleanup_registered_when_none_cm_changed(self,
+                                                   mocked_unreg,
+                                                   mocked_reg):
+    ie.new_env(None)
+    mocked_reg.assert_not_called()
+    mocked_unreg.assert_not_called()
+    ie.current_env().set_cache_manager(cache.FileBasedCacheManager())
+    mocked_reg.assert_called_once()
+    mocked_unreg.assert_not_called()
+
+  @patch('atexit.register')
+  @patch('atexit.unregister')
+  def test_noop_when_cm_is_not_changed(self,
+                                       mocked_unreg,
+                                       mocked_reg):
+    cache_manager = cache.FileBasedCacheManager()
+    ie.new_env(cache_manager)
+    mocked_unreg.assert_not_called()
+    mocked_reg.assert_called_once()
+    ie.current_env().set_cache_manager(cache_manager)
+    mocked_unreg.assert_not_called()
+    mocked_reg.assert_called_once()
 
 
 if __name__ == '__main__':

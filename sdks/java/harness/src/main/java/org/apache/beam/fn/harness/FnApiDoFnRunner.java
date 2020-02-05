@@ -225,6 +225,11 @@ public class FnApiDoFnRunner<InputT, OutputT>
     this.stateAccessor = null;
   }
 
+  @Override
+  public void tearDown() {
+    doFnInvoker.invokeTeardown();
+  }
+
   /** Outputs the given element to the specified set of consumers wrapping any exceptions. */
   private <T> void outputTo(
       Collection<FnDataReceiver<WindowedValue<T>>> consumers, WindowedValue<T> output) {
@@ -331,6 +336,11 @@ public class FnApiDoFnRunner<InputT, OutputT>
     public org.apache.beam.sdk.state.Timer align(Duration period) {
       this.period = period;
       return this;
+    }
+
+    @Override
+    public org.apache.beam.sdk.state.Timer withOutputTimestamp(Instant outputTime) {
+      throw new UnsupportedOperationException("TODO: Add support for timers");
     }
 
     /**

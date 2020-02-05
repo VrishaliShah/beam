@@ -27,6 +27,10 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.apache.beam.sdk.util.LzoCompressorInputStream;
+import org.apache.beam.sdk.util.LzoCompressorOutputStream;
+import org.apache.beam.sdk.util.LzopCompressorInputStream;
+import org.apache.beam.sdk.util.LzopCompressorOutputStream;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.io.ByteStreams;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.primitives.Ints;
@@ -149,6 +153,38 @@ public enum Compression {
     @Override
     public WritableByteChannel writeCompressed(WritableByteChannel channel) throws IOException {
       return Channels.newChannel(new ZstdCompressorOutputStream(Channels.newOutputStream(channel)));
+    }
+  },
+
+  /**
+   * LZO compression using LZO Codec. .lzo_deflate extension is specified for the files which just
+   * use the LZO algorithm without headers.
+   */
+  LZO(".lzo_deflate", ".lzo_deflate") {
+    @Override
+    public ReadableByteChannel readDecompressed(ReadableByteChannel channel) throws IOException {
+      return Channels.newChannel(new LzoCompressorInputStream(Channels.newInputStream(channel)));
+    }
+
+    @Override
+    public WritableByteChannel writeCompressed(WritableByteChannel channel) throws IOException {
+      return Channels.newChannel(new LzoCompressorOutputStream(Channels.newOutputStream(channel)));
+    }
+  },
+
+  /**
+   * LZOP compression using LZOP Codec. .lzo extension is specified for the files with magic bytes
+   * and headers.
+   */
+  LZOP(".lzo", ".lzo") {
+    @Override
+    public ReadableByteChannel readDecompressed(ReadableByteChannel channel) throws IOException {
+      return Channels.newChannel(new LzopCompressorInputStream(Channels.newInputStream(channel)));
+    }
+
+    @Override
+    public WritableByteChannel writeCompressed(WritableByteChannel channel) throws IOException {
+      return Channels.newChannel(new LzopCompressorOutputStream(Channels.newOutputStream(channel)));
     }
   },
 
