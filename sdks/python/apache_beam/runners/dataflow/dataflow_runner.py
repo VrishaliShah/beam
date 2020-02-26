@@ -51,6 +51,7 @@ from apache_beam.options.pipeline_options import StandardOptions
 from apache_beam.options.pipeline_options import TestOptions
 from apache_beam.options.pipeline_options import WorkerOptions
 from apache_beam.portability import common_urns
+from apache_beam.portability.api import beam_runner_api_pb2
 from apache_beam.pvalue import AsSideInput
 from apache_beam.runners.common import DoFnSignature
 from apache_beam.runners.dataflow.internal import names
@@ -342,7 +343,7 @@ class DataflowRunner(PipelineRunner):
                     transform_node.full_label + '/MapToVoidKey%s' % ix,
                     (side_input.pvalue, ))
                 new_side_input.pvalue.producer = map_to_void_key
-                map_to_void_key.add_output(new_side_input.pvalue)
+                map_to_void_key.add_output(new_side_input.pvalue, None)
                 parent.add_part(map_to_void_key)
             elif access_pattern == common_urns.side_inputs.MULTIMAP.urn:
               # Ensure the input coder is a KV coder and patch up the
@@ -383,21 +384,21 @@ class DataflowRunner(PipelineRunner):
   def _check_for_unsupported_fnapi_features(self, pipeline_proto):
     components = pipeline_proto.components
     for windowing_strategy in components.windowing_strategies.values():
-      if windowing_strategy.window_fn.urn not in (
-          common_urns.global_windows.urn,
-          common_urns.fixed_windows.urn,
-          common_urns.sliding_windows.urn,
-          common_urns.session_windows.urn):
+      if (windowing_strategy.merge_status ==
+          beam_runner_api_pb2.MergeStatus.NEEDS_MERGE and
+          windowing_strategy.window_fn.urn not in (
+              common_urns.session_windows.urn, )):
         raise RuntimeError(
-            'Unsupported windowing strategy: %s' %
+            'Unsupported merging windowing strategy: %s' %
             windowing_strategy.window_fn.urn)
       elif components.coders[
           windowing_strategy.window_coder_id].spec.urn not in (
               common_urns.coders.GLOBAL_WINDOW.urn,
               common_urns.coders.INTERVAL_WINDOW.urn):
         raise RuntimeError(
-            'Unsupported window coder: %s' %
-            components.coders[windowing_strategy.window_coder_id].spec.urn)
+            'Unsupported window coder %s for window fn %s' % (
+                components.coders[windowing_strategy.window_coder_id].spec.urn,
+                windowing_strategy.window_fn.urn))
 
   def run_pipeline(self, pipeline, options):
     """Remotely executes entire pipeline or parts reachable from node."""
@@ -955,9 +956,7 @@ class DataflowRunner(PipelineRunner):
     step.add_property(PropertyNames.NON_PARALLEL_INPUTS, si_dict)
 
     # Generate description for the outputs. The output names
-    # will be 'out' for main output and 'out_<tag>' for a tagged output.
-    # Using 'out' as a tag will not clash with the name for main since it will
-    # be transformed into 'out_out' internally.
+    # will be 'None' for main output and '<tag>' for a tagged output.
     outputs = []
     step.encoding = self._get_encoded_output_coder(transform_node)
 
@@ -972,12 +971,11 @@ class DataflowRunner(PipelineRunner):
     # dependending on which output tag we choose as the main output here.
     # Also, some SDKs do not work correctly if output tags are modified. So for
     # external transforms, we leave tags unmodified.
-    main_output_tag = (
-        all_output_tags[0] if external_transform else PropertyNames.OUT)
-
+    #
     # Python SDK uses 'None' as the tag of the main output.
-    tag_to_ignore = main_output_tag if external_transform else 'None'
-    side_output_tags = set(all_output_tags).difference({tag_to_ignore})
+    main_output_tag = (all_output_tags[0] if external_transform else 'None')
+
+    side_output_tags = set(all_output_tags).difference({main_output_tag})
 
     # Add the main output to the description.
     outputs.append({
@@ -994,9 +992,7 @@ class DataflowRunner(PipelineRunner):
           PropertyNames.USER_NAME: (
               '%s.%s' % (transform_node.full_label, side_tag)),
           PropertyNames.ENCODING: step.encoding,
-          PropertyNames.OUTPUT_NAME: (
-              side_tag if external_transform else '%s_%s' %
-              (PropertyNames.OUT, side_tag))
+          PropertyNames.OUTPUT_NAME: side_tag
       })
 
     step.add_property(PropertyNames.OUTPUT_INFO, outputs)
@@ -1314,7 +1310,6 @@ class DataflowRunner(PipelineRunner):
         })
 
   def run_TestStream(self, transform_node, options):
-    from apache_beam.portability.api import beam_runner_api_pb2
     from apache_beam.testing.test_stream import ElementEvent
     from apache_beam.testing.test_stream import ProcessingTimeEvent
     from apache_beam.testing.test_stream import WatermarkEvent
@@ -1365,7 +1360,6 @@ class DataflowRunner(PipelineRunner):
   @classmethod
   def serialize_windowing_strategy(cls, windowing):
     from apache_beam.runners import pipeline_context
-    from apache_beam.portability.api import beam_runner_api_pb2
     context = pipeline_context.PipelineContext()
     windowing_proto = windowing.to_runner_api(context)
     return cls.byte_array_to_json_string(
@@ -1378,7 +1372,6 @@ class DataflowRunner(PipelineRunner):
     # Imported here to avoid circular dependencies.
     # pylint: disable=wrong-import-order, wrong-import-position
     from apache_beam.runners import pipeline_context
-    from apache_beam.portability.api import beam_runner_api_pb2
     from apache_beam.transforms.core import Windowing
     proto = beam_runner_api_pb2.MessageWithComponents()
     proto.ParseFromString(cls.json_string_to_byte_array(serialized_data))

@@ -154,14 +154,15 @@ public enum Compression {
   },
 
   /**
-   * LZO compression using LZO Codec. .lzo_deflate extension is specified for the files which just
+   * LZO compression using LZO codec. {@code .lzo_deflate} extension is specified for files which
    * use the LZO algorithm without headers.
    *
    * <p>The Beam Java SDK does not pull in the required libraries for LZO compression by default, so
    * it is the user's responsibility to declare an explicit dependency on {@code
-   * airlift/aircompressor} and {@code presto-hadoop-apache2}. Attempts to read or write
-   * .lzo_deflate files without {@code airlift/aircompressor} and {@code presto-hadoop-apache2}
-   * loaded will result in {@code NoClassDefFoundError} at runtime.
+   * io.airlift:aircompressor} and {@code com.facebook.presto.hadoop:hadoop-apache2}. Attempts to
+   * read or write {@code .lzo_deflate} files without {@code io.airlift:aircompressor} and {@code
+   * com.facebook.presto.hadoop:hadoop-apache2} loaded will result in a {@code NoClassDefFoundError}
+   * at runtime.
    */
   LZO(".lzo_deflate", ".lzo_deflate") {
     @Override
@@ -178,14 +179,18 @@ public enum Compression {
   },
 
   /**
-   * LZOP compression using LZOP Codec. .lzo extension is specified for the files with magic bytes
-   * and headers.
+   * LZOP compression using LZOP codec. {@code .lzo} extension is specified for files with magic
+   * bytes and headers.
+   *
+   * <p><b>Warning:</b> The LZOP codec being used does not support concatenated LZOP streams and
+   * will silently ignore data after the end of the first LZOP stream.
    *
    * <p>The Beam Java SDK does not pull in the required libraries for LZOP compression by default,
    * so it is the user's responsibility to declare an explicit dependency on {@code
-   * airlift/aircompressor} and {@code presto-hadoop-apache2}. Attempts to read or write .lzo files
-   * without {@code airlift/aircompressor} and {@code presto-hadoop-apache2} loaded will result in
-   * {@code NoClassDefFoundError} at runtime.
+   * io.airlift:aircompressor} and {@code com.facebook.presto.hadoop:hadoop-apache2}. Attempts to
+   * read or write {@code .lzo} files without {@code io.airlift:aircompressor} and {@code
+   * com.facebook.presto.hadoop:hadoop-apache2} loaded will result in a {@code NoClassDefFoundError}
+   * at runtime.
    */
   LZOP(".lzo", ".lzo") {
     @Override
